@@ -1,0 +1,182 @@
+{
+  "_type": "export",
+  "__export_format": 4,
+  "__export_source": "cowork.arquitetura-resiliente-mensageria",
+  "resources": [
+    {
+      "_id": "wrk_credito",
+      "_type": "workspace",
+      "parentId": null,
+      "name": "Arquitetura Resiliente - Crédito",
+      "description": "Coleção para testar o fluxo Outbox + RabbitMQ: API -> publicador -> consumidor -> proposta/rejeição.",
+      "scope": "collection"
+    },
+    {
+      "_id": "env_base",
+      "_type": "environment",
+      "parentId": "wrk_credito",
+      "name": "Base Environment",
+      "data": {
+        "base_url": "http://localhost:8080",
+        "rabbit_url": "http://localhost:15672",
+        "rabbit_user": "guest",
+        "rabbit_pass": "guest",
+        "queue": "solicitacoes-credito",
+        "dlq": "solicitacoes-credito.dlq"
+      },
+      "dataPropertyOrder": {
+        "&": ["base_url", "rabbit_url", "rabbit_user", "rabbit_pass", "queue", "dlq"]
+      },
+      "metaSortKey": 1
+    },
+    {
+      "_id": "fld_fluxo",
+      "_type": "request_group",
+      "parentId": "wrk_credito",
+      "name": "01 - Fluxo de Solicitação de Crédito",
+      "description": "Envia solicitações para a API. A API grava (Outbox atômico), o publicador envia ao RabbitMQ e o consumidor gera Proposta (aprovada) ou SolicitacaoRejeitada (rejeitada).",
+      "metaSortKey": 10
+    },
+    {
+      "_id": "req_aprovada",
+      "_type": "request",
+      "parentId": "fld_fluxo",
+      "name": "Criar Solicitação - APROVADA (valor 15k / 24m)",
+      "method": "POST",
+      "url": "{{ _.base_url }}/api/solicitacoes-credito",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"idCliente\": 1001,\n  \"valorSolicitado\": 15000.00,\n  \"prazoMeses\": 24,\n  \"tipoProduto\": 1,\n  \"dataSolicitacao\": \"2026-07-11T12:00:00Z\"\n}"
+      },
+      "headers": [
+        { "name": "Content-Type", "value": "application/json" }
+      ],
+      "description": "Valor <= 20.000 e prazo <= 36 => aprovada. Deve gerar uma Proposta. Retorna 202 com jaExistia=false e solicitacaoCreditoId.",
+      "metaSortKey": 11
+    },
+    {
+      "_id": "req_idempotencia",
+      "_type": "request",
+      "parentId": "fld_fluxo",
+      "name": "Reenvio IDÊNTICO (idempotência)",
+      "method": "POST",
+      "url": "{{ _.base_url }}/api/solicitacoes-credito",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"idCliente\": 1001,\n  \"valorSolicitado\": 15000.00,\n  \"prazoMeses\": 24,\n  \"tipoProduto\": 1,\n  \"dataSolicitacao\": \"2026-07-11T12:00:00Z\"\n}"
+      },
+      "headers": [
+        { "name": "Content-Type", "value": "application/json" }
+      ],
+      "description": "Corpo idêntico ao da APROVADA (mesma IdempotencyKey na mesma janela de 48h). Deve retornar jaExistia=true e NÃO criar nova solicitação/proposta.",
+      "metaSortKey": 12
+    },
+    {
+      "_id": "req_rej_valor",
+      "_type": "request",
+      "parentId": "fld_fluxo",
+      "name": "Criar Solicitação - REJEITADA por valor (50k)",
+      "method": "POST",
+      "url": "{{ _.base_url }}/api/solicitacoes-credito",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"idCliente\": 2002,\n  \"valorSolicitado\": 50000.00,\n  \"prazoMeses\": 24,\n  \"tipoProduto\": 4,\n  \"dataSolicitacao\": \"2026-07-11T12:00:00Z\"\n}"
+      },
+      "headers": [
+        { "name": "Content-Type", "value": "application/json" }
+      ],
+      "description": "Valor > 20.000 => rejeitada. Deve gerar uma SolicitacaoRejeitada com motivo de valor acima do limite.",
+      "metaSortKey": 13
+    },
+    {
+      "_id": "req_rej_prazo",
+      "_type": "request",
+      "parentId": "fld_fluxo",
+      "name": "Criar Solicitação - REJEITADA por prazo (48m)",
+      "method": "POST",
+      "url": "{{ _.base_url }}/api/solicitacoes-credito",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"idCliente\": 3003,\n  \"valorSolicitado\": 10000.00,\n  \"prazoMeses\": 48,\n  \"tipoProduto\": 1,\n  \"dataSolicitacao\": \"2026-07-11T12:00:00Z\"\n}"
+      },
+      "headers": [
+        { "name": "Content-Type", "value": "application/json" }
+      ],
+      "description": "Prazo > 36 meses => rejeitada. Deve gerar uma SolicitacaoRejeitada com motivo de prazo.",
+      "metaSortKey": 14
+    },
+    {
+      "_id": "req_poison",
+      "_type": "request",
+      "parentId": "fld_fluxo",
+      "name": "Poison message - FORÇA DLQ (IdCliente 666)",
+      "method": "POST",
+      "url": "{{ _.base_url }}/api/solicitacoes-credito",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"idCliente\": 666,\n  \"valorSolicitado\": 10000.00,\n  \"prazoMeses\": 12,\n  \"tipoProduto\": 1,\n  \"dataSolicitacao\": \"2026-07-11T12:00:00Z\"\n}"
+      },
+      "headers": [
+        { "name": "Content-Type", "value": "application/json" }
+      ],
+      "description": "IdCliente=666 aciona uma falha simulada no consumidor. A fila quorum reentrega 3x (veja x-delivery-count nos logs) e depois manda a mensagem para a DLQ solicitacoes-credito.dlq. Acompanhe no painel do RabbitMQ.",
+      "metaSortKey": 15
+    },
+    {
+      "_id": "fld_infra",
+      "_type": "request_group",
+      "parentId": "wrk_credito",
+      "name": "02 - Verificação (RabbitMQ / Swagger)",
+      "description": "Requests auxiliares para inspecionar a fila e a documentação.",
+      "metaSortKey": 20
+    },
+    {
+      "_id": "req_rabbit_queue",
+      "_type": "request",
+      "parentId": "fld_infra",
+      "name": "RabbitMQ - Estado da fila solicitacoes-credito",
+      "method": "GET",
+      "url": "{{ _.rabbit_url }}/api/queues/%2F/{{ _.queue }}",
+      "body": {},
+      "headers": [],
+      "authentication": {
+        "type": "basic",
+        "useISO88591": false,
+        "username": "{{ _.rabbit_user }}",
+        "password": "{{ _.rabbit_pass }}"
+      },
+      "description": "API de gerenciamento do RabbitMQ (%2F = vhost padrão '/'). Mostra messages, messages_ready e taxas. Útil para ver mensagens entrando/saindo da fila.",
+      "metaSortKey": 21
+    },
+    {
+      "_id": "req_rabbit_dlq",
+      "_type": "request",
+      "parentId": "fld_infra",
+      "name": "RabbitMQ - Estado da DLQ (solicitacoes-credito.dlq)",
+      "method": "GET",
+      "url": "{{ _.rabbit_url }}/api/queues/%2F/{{ _.dlq }}",
+      "body": {},
+      "headers": [],
+      "authentication": {
+        "type": "basic",
+        "useISO88591": false,
+        "username": "{{ _.rabbit_user }}",
+        "password": "{{ _.rabbit_pass }}"
+      },
+      "description": "Mostra as mensagens que foram para a dead-letter queue após estourar o limite de 3 tentativas. Rode a 'Poison message' e depois consulte aqui.",
+      "metaSortKey": 22
+    },
+    {
+      "_id": "req_swagger",
+      "_type": "request",
+      "parentId": "fld_infra",
+      "name": "API - Swagger (documentação)",
+      "method": "GET",
+      "url": "{{ _.base_url }}/swagger/index.html",
+      "body": {},
+      "headers": [],
+      "description": "Abre a UI do Swagger da API (ambiente Development).",
+      "metaSortKey": 23
+    }
+  ]
+}

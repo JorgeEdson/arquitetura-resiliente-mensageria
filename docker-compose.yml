@@ -1,0 +1,131 @@
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: sqlserver_credito
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=SenhaForte!123
+      - MSSQL_PID=Developer
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    networks:
+      - rede_credito
+
+  sqlserver-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: sqlserver_credito_init
+    depends_on:
+      - sqlserver
+    restart: "no"
+    volumes:      
+      - ./scripts-iniciais:/scripts
+    entrypoint: ["/bin/bash", "-c"]
+    command: ["sleep 30 && /opt/mssql-tools18/bin/sqlcmd -C -S sqlserver,1433 -U sa -P 'SenhaForte!123' -i /scripts/script-inicial.sql"]
+    networks:
+      - rede_credito
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq_credito
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # painel de gerenciamento
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rede_credito
+
+  api-solicitacao-credito:
+    build:
+      context: ./1-api-solicitacao-credito/api-solicitacao-credito
+      dockerfile: Dockerfile
+    container_name: api_solicitacao_credito
+    depends_on:
+      - sqlserver
+      - sqlserver-init
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__SolicitacaoCreditoDb=Server=sqlserver,1433;Database=SolicitacaoCreditoDb;User Id=sa;Password=SenhaForte!123;Encrypt=False;TrustServerCertificate=True
+    ports:
+      - "8080:8080"
+    networks:
+      - rede_credito
+
+  worker-publicador:
+    build:
+      context: ./2-worker-publicador/worker-publicador
+      dockerfile: Dockerfile
+    container_name: worker_publicador
+    depends_on:
+      sqlserver:
+        condition: service_started
+      sqlserver-init:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - DOTNET_ENVIRONMENT=Development
+      - ConnectionStrings__CreditoDb=Server=sqlserver,1433;Database=SolicitacaoCreditoDb;User Id=sa;Password=SenhaForte!123;Encrypt=False;TrustServerCertificate=True
+      - RabbitMq__HostName=rabbitmq
+      - RabbitMq__Port=5672
+      - RabbitMq__UserName=guest
+      - RabbitMq__Password=guest
+      - RabbitMq__VirtualHost=/
+      - RabbitMq__QueueName=solicitacoes-credito
+    networks:
+      - rede_credito
+
+  worker-consumidor:
+    build:
+      context: ./4-worker-consumidor/worker-consumidor
+      dockerfile: Dockerfile
+    container_name: worker_consumidor
+    depends_on:
+      sqlserver:
+        condition: service_started
+      sqlserver-init:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - DOTNET_ENVIRONMENT=Development
+      - ConnectionStrings__CreditoDb=Server=sqlserver,1433;Database=SolicitacaoCreditoDb;User Id=sa;Password=SenhaForte!123;Encrypt=False;TrustServerCertificate=True
+      - RabbitMq__HostName=rabbitmq
+      - RabbitMq__Port=5672
+      - RabbitMq__UserName=guest
+      - RabbitMq__Password=guest
+      - RabbitMq__VirtualHost=/
+      - RabbitMq__QueueName=solicitacoes-credito
+    networks:
+      - rede_credito
+
+  worker-expurgo-outbox:
+    build:
+      context: ./3-worker-expurgo-outbox/worker-expurgo-outbox
+      dockerfile: Dockerfile
+    container_name: worker_expurgo_outbox
+    depends_on:
+      - sqlserver
+      - sqlserver-init
+    environment:
+      - DOTNET_ENVIRONMENT=Development
+      - ConnectionStrings__CreditoDb=Server=sqlserver,1433;Database=SolicitacaoCreditoDb;User Id=sa;Password=SenhaForte!123;Encrypt=False;TrustServerCertificate=True
+      - OutboxCleanup__DaysToKeep=2
+      - OutboxCleanup__HoraExecucaoUtc=23
+    networks:
+      - rede_credito
+
+volumes:
+  sqlserver_data:
+
+networks:
+  rede_credito:
+    driver: bridge
