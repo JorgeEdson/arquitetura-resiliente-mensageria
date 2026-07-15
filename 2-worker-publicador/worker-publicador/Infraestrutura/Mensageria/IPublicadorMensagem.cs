@@ -18,40 +18,24 @@ namespace worker_publicador.Infraestrutura.Mensageria
         private readonly string _queueName;
 
         public RabbitMqMessagePublisher(
+              IConnection connection,
               IConfiguration configuration,
               ILogger<RabbitMqMessagePublisher> logger)
         {
             _logger = logger;
 
-            var hostName = configuration["RabbitMq:HostName"];
+            // Conexão compartilhada (singleton), injetada via DI. A mesma conexão
+            // é usada pelo RabbitMqHealthCheck para o probe de readiness.
+            _connection = connection;
             _queueName = configuration["RabbitMq:QueueName"] ?? string.Empty;
-
-            if (string.IsNullOrWhiteSpace(hostName))
-                throw new InvalidOperationException("RabbitMq:HostName não configurado.");
 
             if (string.IsNullOrWhiteSpace(_queueName))
                 throw new InvalidOperationException("RabbitMq:QueueName não configurada.");
 
-            var factory = new ConnectionFactory
-            {
-                HostName = hostName,
-                Port = int.TryParse(configuration["RabbitMq:Port"], out var porta) ? porta : 5672,
-                UserName = configuration["RabbitMq:UserName"] ?? "guest",
-                Password = configuration["RabbitMq:Password"] ?? "guest",
-                VirtualHost = configuration["RabbitMq:VirtualHost"] ?? "/",
-
-                // Resiliência de conexão: reconecta e refaz topologia automaticamente.
-                AutomaticRecoveryEnabled = true,
-                NetworkRecoveryInterval = TimeSpan.FromSeconds(10)
-            };
-
             _logger.LogInformation(
-                "Inicializando RabbitMqMessagePublisher. Host={HostName}, Port={Port}, Queue={QueueName}",
-                factory.HostName,
-                factory.Port,
+                "Inicializando RabbitMqMessagePublisher. Queue={QueueName}",
                 _queueName);
 
-            _connection = factory.CreateConnection();
             _channel = _connection.CreateModel();
 
             // Publisher confirms: só consideramos publicado após o ACK do broker.
@@ -146,15 +130,12 @@ namespace worker_publicador.Infraestrutura.Mensageria
         {
             _logger.LogInformation("Liberando recursos do RabbitMqMessagePublisher.");
 
+            // Fecha apenas o canal. A IConnection é um singleton gerenciado pelo
+            // container de DI, que se encarrega de descartá-la no shutdown.
             if (_channel is { IsOpen: true })
                 _channel.Close();
 
             _channel?.Dispose();
-
-            if (_connection is { IsOpen: true })
-                _connection.Close();
-
-            _connection?.Dispose();
 
             _logger.LogInformation("Recursos do RabbitMqMessagePublisher liberados com sucesso.");
         }

@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
+using Polly;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using RabbitMQ.Client.Exceptions;
 using System.Text;
 using worker_consumidor.Services;
 
@@ -52,7 +54,21 @@ namespace worker_consumidor.Infraestrutura.Mensageria
                 DispatchConsumersAsync = true
             };
 
-            _connection = factory.CreateConnection();
+            // Resiliência de STARTUP: no docker compose o broker pode responder ao
+            // healthcheck antes de o listener AMQP aceitar conexões. Em vez de deixar
+            // o container morrer, tentamos conectar com backoff antes de desistir.
+            var retry = Policy
+                .Handle<BrokerUnreachableException>()
+                .WaitAndRetry(
+                    retryCount: 10,
+                    sleepDurationProvider: tentativa =>
+                        TimeSpan.FromSeconds(Math.Min(Math.Pow(2, tentativa), 30)), // 2s..30s
+                    onRetry: (ex, espera, tentativa, _) =>
+                        _logger.LogWarning(
+                            "RabbitMQ indisponível ao iniciar. Tentativa={Tentativa}, aguardando {Espera}s...",
+                            tentativa, espera.TotalSeconds));
+
+            _connection = retry.Execute(() => factory.CreateConnection());
             _channel = _connection.CreateModel();
 
             

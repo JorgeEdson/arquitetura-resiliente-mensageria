@@ -33,13 +33,14 @@ services:
       - RABBITMQ_DEFAULT_USER=guest
       - RABBITMQ_DEFAULT_PASS=guest
     ports:
-      - "5672:5672"    # AMQP
-      - "15672:15672"  # painel de gerenciamento
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      - "5672:5672"    
+      - "15672:15672"  
+    healthcheck:      
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 20s
     networks:
       - rede_credito
 
